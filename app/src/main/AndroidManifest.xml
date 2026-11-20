@@ -23,6 +23,11 @@
             android:name="xposedminversion"
             android:value="82" />
 
+        <!-- 推荐作用域：LSPosed 安装后默认勾选微信，用户仍可修改 -->
+        <meta-data
+            android:name="xposedscope"
+            android:resource="@array/xposedscope" />
+
     </application>
 
 </manifest>
