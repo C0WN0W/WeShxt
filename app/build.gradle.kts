@@ -16,6 +16,11 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        ndk {
+            // 只保留真机常见 ABI；模拟器调试时把 x86_64 加回来
+            abiFilters.addAll(listOf("arm64-v8a", "armeabi-v7a"))
+        }
     }
 
     buildTypes {
@@ -33,9 +38,11 @@ android {
 }
 
 dependencies {
-    implementation(libs.androidx.appcompat)
-    implementation(libs.androidx.core.ktx)
-    implementation(libs.material)
+    // Xposed API 只在编译期需要，运行时由 LSPosed 提供
+    compileOnly("de.robv.android.xposed:api:82")
+    // 运行时按字符串检索目标方法，避开微信每版变化的混淆名
+    implementation("org.luckypray:dexkit:2.3.0")
+
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(libs.androidx.junit)
