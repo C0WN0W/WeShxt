@@ -7,25 +7,26 @@ import org.luckypray.dexkit.result.MethodData
 import java.lang.reflect.Method
 
 /**
- * 本地防撤回 + 灰条提示。
+ * 本地防撤回。
  *
- * 原理：微信收到"对方撤回"后会调用一个处理撤回的方法（内部日志为
- * "doRevokeMsg xmlSrvMsgId=%d talker=%s isGet=%s"）。在该方法执行前直接
- * 返回，撤回流程就被跳过：本地消息不删除。
+ * 默认 EDIT_CONTENT = true：
+ *   整个撤回方法跳过（消息保留），再把这条消息的 content 改成
+ *   "原内容\n\n(已撤回)"。不构造 MsgInfo。
  *
- * 随后由 [TipInserter] 往会话里插入一条 type=10000 的系统消息，
- * 内容为 "xxx撤回了一条消息 (已阻止)"，即微信原生的灰色提示条。
+ * EDIT_CONTENT = false：
+ *   旧方案：拦截后用 [TipInserter] 插入 type=10000 灰条。
  */
 object AntiRevoke {
 
-    /** 定位锚点：目标方法里唯一的一条日志串 */
-    private const val MARKER = "doRevokeMsg xmlSrvMsgId=%d talker=%s isGet=%s"
+    private const val EDIT_CONTENT = true
 
-    /** 兜底锚点：微信给日志加了/删了占位符时，前半段仍然不变 */
+    private const val MARKER = "doRevokeMsg xmlSrvMsgId=%d talker=%s isGet=%s"
     private const val MARKER_PREFIX = "doRevokeMsg xmlSrvMsgId="
 
     fun install(classLoader: ClassLoader, apkPath: String) {
         val start = System.currentTimeMillis()
+        RevokeGuard.install(classLoader)
+        UiRefresh.install()
         try {
             DexScanner.withBridge(apkPath) { bridge ->
                 val targets = findTargets(bridge)
@@ -34,7 +35,7 @@ object AntiRevoke {
                     return@withBridge
                 }
 
-                val tip = TipInserter.resolve(bridge, classLoader, targets.first())
+                val tip = if (EDIT_CONTENT) null else TipInserter.resolve(bridge, classLoader, targets.first())
                 val methods = DexScanner.toReflectMethods(targets, classLoader)
                 var hooked = 0
                 for (method in methods) {
@@ -42,7 +43,7 @@ object AntiRevoke {
                 }
                 XposedBridge.log(
                     "[WeShit] ready: $hooked/${methods.size} method(s), " +
-                        "tip=${tip != null}, ${System.currentTimeMillis() - start} ms"
+                        "edit=$EDIT_CONTENT, ${System.currentTimeMillis() - start} ms"
                 )
             }
         } catch (t: Throwable) {
@@ -57,7 +58,7 @@ object AntiRevoke {
         return DexScanner.findMethods(bridge, MARKER_PREFIX, exact = false)
     }
 
-    private fun hook(method: Method, tip: TipInserter.Spec?): Boolean {
+    private fun hook(method: Method, tip: TipInserter.Session?): Boolean {
         return try {
             XposedBridge.hookMethod(method, object : XC_MethodHook() {
                 override fun beforeHookedMethod(param: MethodHookParam) {
@@ -70,11 +71,40 @@ object AntiRevoke {
 
                     val talker = Talker.find(args)
 
+                    if (EDIT_CONTENT) {
+                        val serverId = args.filterIsInstance<Long>().firstOrNull { it > 0 }
+                        block(param)
+                        if (serverId == null) {
+                            XposedBridge.log("[WeShit] edit skipped: no serverId in args")
+                            return
+                        }
+                        XposedBridge.log("[WeShit] blocked revoke: serverId=$serverId talker=$talker")
+                        Thread({
+                            try {
+                                Thread.sleep(300)
+                                when (RevokeGuard.appendContent(serverId, talker, "\n\n(已撤回)")) {
+                                    RevokeGuard.R_TEXT -> UiRefresh.refreshChat()
+                                    RevokeGuard.R_NON_TEXT ->
+                                        UiRefresh.toast("对方撤回了一条消息（已撤回）")
+                                }
+                            } catch (t: Throwable) {
+                                XposedBridge.log("[WeShit] edit failed: $t")
+                            }
+                        }, "WeShit-Edit").start()
+                        return
+                    }
+
+                    tip?.let { session ->
+                        args.firstOrNull { session.msgClass.isInstance(it) }?.let { session.tryProbe(it) }
+                    }
                     block(param)
                     tip?.let { TipInserter.schedule(it, talker, nativeText) }
                 }
             })
             XposedBridge.log("[WeShit] hooked ${method.declaringClass.name}#${method.name}")
+            XposedBridge.log(
+                "[WeShit] revoke params: " + method.parameterTypes.joinToString(",") { it.name }
+            )
             true
         } catch (t: Throwable) {
             XposedBridge.log("[WeShit] hook failed on ${method.declaringClass.name}#${method.name}: $t")
@@ -82,10 +112,6 @@ object AntiRevoke {
         }
     }
 
-    /**
-     * before 阶段写入返回值即等于"跳过原方法"。
-     * void / 引用类型给 null；基本类型必须给对应零值，否则 Xposed 会抛类型错误。
-     */
     private fun block(param: XC_MethodHook.MethodHookParam) {
         val type = (param.method as? Method)?.returnType ?: return
         param.result = if (type == Void.TYPE || !type.isPrimitive) null else zeroOf(type)

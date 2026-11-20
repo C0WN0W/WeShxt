@@ -1,6 +1,6 @@
 # We泄 ♂
 
-极简微信防撤回模块，微X风格提示 `xxx撤回了一条消息 (已阻止)`
+极简微信防撤回模块，暴力修改原文提示
 
 ## 构建 / 安装
 
@@ -20,7 +20,8 @@ adb logcat -s LSPosed-Bridge:* | Select-String "WeShit"
 
 - 防撤回仅对本地聊天记录生效；重新登录/更换设备/清除缓存后消息仍会消失。
 - 自己撤回不拦截。
-- 已知bug: 部分微信版本消息保留，无提示；排查见日志 `tip resolved` / `tip disabled`。
+- 撤回提示: `UPDATE message SET content = content || '\n\n(已撤回)'`
+- 日志: `blocked revoke` / `edited msgSvrId` / `edit skipped` / `chat ui recreated`。
 
 ## 参考与致谢
 

@@ -32,4 +32,7 @@ object Talker {
 
     fun find(args: Array<Any?>): String? =
         args.filterIsInstance<String>().firstOrNull { PATTERN.matches(it) }
+
+    fun isTalker(value: String?): Boolean =
+        value != null && PATTERN.matches(value)
 }
